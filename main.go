@@ -3,6 +3,7 @@ package main
 import (
 	// add this
 
+	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
@@ -40,7 +41,7 @@ func main() {
 	}
 	db.resourcesUUIDStmt = stmt
 
-	stmt2, err := db.db.Preparex(`select r.resource_id , r."name", r."type", r2.scope_id, sc."name" as scope_name from resources r left join public.resourcesscopes r2 on r2.resource_id = r.resource_id left join public.scopes sc on sc.scope_id = r2.scope_id left join public.userpermissions u on u.resourcesscope_id = r2.resourcesscope_id where u.uuid = $1 and r."type" like '$2%'`)
+	stmt2, err := db.db.Preparex(`select r.resource_id , r."name", r."type", r2.scope_id, sc."name" as scope_name from resources r left join public.resourcesscopes r2 on r2.resource_id = r.resource_id left join public.scopes sc on sc.scope_id = r2.scope_id left join public.userpermissions u on u.resourcesscope_id = r2.resourcesscope_id where u.uuid = $1 and r."type" like '$2%';`)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -81,19 +82,36 @@ func (db *DB) indexHandler(c *fiber.Ctx) error {
 	}
 	return c.JSON(resources)
 }
+
+// http://localhost:3000/resources/e3cb82c9-6b37-4d13-8583-344e83ad74af
+// http://localhost:3000/resources/e3cb82c9-6b37-4d13-8583-344e83ad74af?type=org:team
+// http://localhost:3000/resources/e3cb82c9-6b37-4d13-8583-344e83ad74af?type=org
 func (db *DB) resourcesHandler(c *fiber.Ctx) error {
 	uuid := c.Params("uuid")
+	if uuid == "" {
+		c.Status(http.StatusInternalServerError).JSON("Error requesting resources")
+		return nil
+	}
 
 	var rows *sqlx.Rows
 	var err error
-	types := c.Query("type")
-	if len(types) > 0 {
-		log.Printf("Query resources with type: %s", types)
-		rows, err = db.resourcesTypeStmt.Queryx(uuid, types)
+	qType := c.Query("type")
+	if len(qType) > 0 {
+		log.Printf("Query resources with type: %s", qType)
+		q := fmt.Sprintf("select r.resource_id , r.name, r.type, r2.scope_id, sc.name as scope_name from resources r left join public.resourcesscopes r2 on r2.resource_id = r.resource_id left join public.scopes sc on sc.scope_id = r2.scope_id left join public.userpermissions u on u.resourcesscope_id = r2.resourcesscope_id where u.uuid = '%s' and r.type like '%s%%';", uuid, qType)
+		log.Println(q)
+		rows, err = db.db.Queryx(q)
 	} else {
 		rows, err = db.resourcesUUIDStmt.Queryx(uuid)
 	}
 
+	// Error no rows: Returny empty object
+	if err == sql.ErrNoRows {
+		log.Println(err)
+		c.JSON(map[string]dto.ResourcesTree{})
+		return nil
+	}
+	// Generic error
 	if err != nil {
 		log.Println(err)
 		c.Status(http.StatusInternalServerError).JSON("Error requesting resources")
@@ -115,11 +133,11 @@ func (db *DB) resourcesHandler(c *fiber.Ctx) error {
 
 	// Create the original 'resource tree'
 	rTree := map[string]dto.ResourcesTree{}
-
+	log.Println("RESULTS:")
 	for rows.Next() {
 		var resourcesPermission dto.ResourcesPermission
 		rows.StructScan(&resourcesPermission)
-
+		fmt.Printf("%#v\n", resourcesPermission)
 		/*
 			Split the "name" and the "types" to get the path of the name and the types as follows
 			names := ["ruv", "kompass"]
@@ -138,6 +156,9 @@ func (db *DB) resourcesHandler(c *fiber.Ctx) error {
 
 			// Create the 'type path': We are in loop 1; get all "types" from "0" to "1+1" and join them with ":"
 			typePath = strings.Join(types[0:i+1], ":")
+			if len(qType) > 0 && qType != typePath {
+				continue
+			}
 
 			// The loop internal 'resource tree' point to the 'pointer original tree'
 			rt := *rTreeP
