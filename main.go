@@ -6,8 +6,10 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/jmoiron/sqlx"
@@ -86,8 +88,18 @@ func (db *DB) indexHandler(c *fiber.Ctx) error {
 // http://localhost:3000/resources/e3cb82c9-6b37-4d13-8583-344e83ad74af
 // http://localhost:3000/resources/e3cb82c9-6b37-4d13-8583-344e83ad74af?type=org:team
 // http://localhost:3000/resources/e3cb82c9-6b37-4d13-8583-344e83ad74af?type=org
+// http://localhost:3000/resources/e3cb82c9-6b37-4d13-8583-344e83ad74af?depth=2&type=org:team
 func (db *DB) resourcesHandler(c *fiber.Ctx) error {
+
 	uuid := c.Params("uuid")
+
+	// Query Parameters
+	qType := c.Query("type")
+	qDepth, errAtoi := strconv.Atoi(c.Query("depth"))
+	if errAtoi != nil {
+		qDepth = math.MaxInt
+	}
+
 	if uuid == "" {
 		c.Status(http.StatusInternalServerError).JSON("Error requesting resources")
 		return nil
@@ -95,7 +107,7 @@ func (db *DB) resourcesHandler(c *fiber.Ctx) error {
 
 	var rows *sqlx.Rows
 	var err error
-	qType := c.Query("type")
+
 	if len(qType) > 0 {
 		log.Printf("Query resources with type: %s", qType)
 		q := fmt.Sprintf("select r.resource_id , r.name, r.type, r2.scope_id, sc.name as scope_name from resources r left join public.resourcesscopes r2 on r2.resource_id = r.resource_id left join public.scopes sc on sc.scope_id = r2.scope_id left join public.userpermissions u on u.resourcesscope_id = r2.resourcesscope_id where u.uuid = '%s' and r.type like '%s%%';", uuid, qType)
@@ -151,6 +163,7 @@ func (db *DB) resourcesHandler(c *fiber.Ctx) error {
 
 		// For each SQL row create a new empty string for the type path like "org" ... "org:team" ... "org:team:service"
 		var typePath string
+		x := 0
 		// Range the 'names' ["ruv"", "kompass"]
 		for i, n := range names {
 
@@ -159,6 +172,11 @@ func (db *DB) resourcesHandler(c *fiber.Ctx) error {
 			if len(qType) > 0 && !strings.HasPrefix(typePath, qType) {
 				continue
 			}
+
+			if x > qDepth {
+				continue
+			}
+			x++
 
 			// The loop internal 'resource tree' point to the 'pointer original tree'
 			rt := *rTreeP
