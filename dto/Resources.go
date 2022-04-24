@@ -22,8 +22,9 @@ type ResourcesPermission struct {
 }
 
 type ResourcesTree struct {
-	Name      string                   `json:"name"`
-	Type      string                   `json:"type"`
-	Scopes    []string                 `json:"scopes"`
-	Resources map[string]ResourcesTree `json:"resources"`
+	Name         string                   `json:"name"`
+	OriginalName string                   `json:"original_name"`
+	Type         string                   `json:"type"`
+	Scopes       []string                 `json:"scopes"`
+	Resources    map[string]ResourcesTree `json:"resources"`
 }

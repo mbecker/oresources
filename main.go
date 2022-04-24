@@ -156,7 +156,7 @@ func (db *DB) resourcesHandler(c *fiber.Ctx) error {
 
 			// Create the 'type path': We are in loop 1; get all "types" from "0" to "1+1" and join them with ":"
 			typePath = strings.Join(types[0:i+1], ":")
-			if len(qType) > 0 && qType != typePath {
+			if len(qType) > 0 && !strings.HasPrefix(typePath, qType) {
 				continue
 			}
 
@@ -171,10 +171,11 @@ func (db *DB) resourcesHandler(c *fiber.Ctx) error {
 				// Last Element
 				if i == len(types)-1 {
 					rt[n] = dto.ResourcesTree{
-						Name:      n,
-						Type:      typePath,
-						Scopes:    []string{resourcesPermission.ScopeName},
-						Resources: resTree,
+						Name:         n,
+						OriginalName: resourcesPermission.Name,
+						Type:         typePath,
+						Scopes:       []string{resourcesPermission.ScopeName},
+						Resources:    resTree,
 					}
 				} else {
 					// All elements before 'last name' in 'names'
