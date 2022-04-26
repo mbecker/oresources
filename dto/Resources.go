@@ -28,3 +28,14 @@ type ResourcesTree struct {
 	Scopes       []string                 `json:"scopes"`
 	Resources    map[string]ResourcesTree `json:"resources"`
 }
+
+type DBRole struct {
+	RoleID int    `db:"role_id"`
+	Name   string `db:"name"`
+}
+
+type Role struct {
+	Name string `json:"original_name"`
+	Role string `json:"role"`
+	Type string `json:"type"`
+}

@@ -59,6 +59,7 @@ func main() {
 	app.Get("/", db.indexHandler) // Add this
 
 	app.Get("/resources/:uuid", db.resourcesHandler) // Add this
+	app.Get("/roles/:uuid", db.groupsHandler)
 
 	app.Put("/update", db.putHandler) // Add this
 
@@ -85,6 +86,44 @@ func (db *DB) indexHandler(c *fiber.Ctx) error {
 	return c.JSON(resources)
 }
 
+func (db *DB) groupsHandler(c *fiber.Ctx) error {
+	uuid := c.Params("uuid")
+	if uuid == "" {
+		c.Status(http.StatusInternalServerError).JSON("Error requesting resources")
+		return nil
+	}
+
+	rows, err := db.db.Queryx(`select r.name from public.roles r left join public.userroles u ON u.role_id = r.role_id where u.uuid =$1;`, uuid)
+
+	if err != nil {
+		log.Println(err)
+		c.Status(http.StatusInternalServerError).JSON("Error requesting resources")
+		return nil
+	}
+
+	roles := []dto.Role{}
+	for rows.Next() {
+		var dbRole dto.DBRole
+		rows.StructScan(&dbRole)
+		log.Printf("%#v", dbRole)
+		if dbRole.Name == "" {
+			continue
+		}
+		role := dto.Role{
+			Name: dbRole.Name,
+		}
+		// Has "type" in name
+		types := strings.Split(dbRole.Name, ":")
+		if len(types) > 0 {
+			role.Role = types[len(types)-1]
+			role.Type = strings.Join(types[0:len(types)-1], ":")
+		}
+		roles = append(roles, role)
+
+	}
+	return c.JSON(roles)
+}
+
 // http://localhost:3000/resources/e3cb82c9-6b37-4d13-8583-344e83ad74af
 // http://localhost:3000/resources/e3cb82c9-6b37-4d13-8583-344e83ad74af?type=org:team
 // http://localhost:3000/resources/e3cb82c9-6b37-4d13-8583-344e83ad74af?type=org
@@ -92,17 +131,16 @@ func (db *DB) indexHandler(c *fiber.Ctx) error {
 func (db *DB) resourcesHandler(c *fiber.Ctx) error {
 
 	uuid := c.Params("uuid")
+	if uuid == "" {
+		c.Status(http.StatusInternalServerError).JSON("Error requesting resources")
+		return nil
+	}
 
 	// Query Parameters
 	qType := c.Query("type")
 	qDepth, errAtoi := strconv.Atoi(c.Query("depth"))
 	if errAtoi != nil {
 		qDepth = math.MaxInt
-	}
-
-	if uuid == "" {
-		c.Status(http.StatusInternalServerError).JSON("Error requesting resources")
-		return nil
 	}
 
 	var rows *sqlx.Rows
