@@ -26,6 +26,7 @@ type ResourcesTree struct {
 	OriginalName string                   `json:"original_name"`
 	Type         string                   `json:"type"`
 	Scopes       []string                 `json:"scopes"`
+	Roles        []string                 `json:"roles"`
 	Resources    map[string]ResourcesTree `json:"resources"`
 }
 
@@ -35,7 +36,24 @@ type DBRole struct {
 }
 
 type Role struct {
-	Name string `json:"original_name"`
-	Role string `json:"role"`
-	Type string `json:"type"`
+	Name        string                   `json:"original_name"`
+	Role        string                   `json:"role"`
+	Type        string                   `json:"type"`
+	Permission  []ResourcesPermission    `json:"permissions"`
+	ResourceTee map[string]ResourcesTree `json:"resource_tree"`
+}
+
+type ResourcesRolesResult struct {
+	ResourcesRoles ResourcesRoles           `json:"resources_roles"`
+	ResourceTee    map[string]ResourcesTree `json:"resource_tree"`
+}
+
+type RoleSingle struct {
+	Name string `db:"name"`
+}
+
+type ResourcesRoles map[string][]string
+
+func NewResourcesRoles() ResourcesRoles {
+	return ResourcesRoles{}
 }

@@ -60,6 +60,7 @@ func main() {
 
 	app.Get("/resources/:uuid", db.resourcesHandler) // Add this
 	app.Get("/roles/:uuid", db.groupsHandler)
+	app.Get("/rolestest/:uuid", db.rolesHandler)
 
 	app.Put("/update", db.putHandler) // Add this
 
@@ -86,6 +87,66 @@ func (db *DB) indexHandler(c *fiber.Ctx) error {
 	return c.JSON(resources)
 }
 
+func (db *DB) rolesHandler(c *fiber.Ctx) error {
+	uuid := c.Params("uuid")
+	if uuid == "" {
+		c.Status(http.StatusInternalServerError).JSON("Error requesting resources")
+		return nil
+	}
+
+	rows, err := db.db.Queryx(`select r.role_id, r.name from public.roles r left join public.userroles u ON u.role_id = r.role_id where u.uuid =$1;`, uuid)
+
+	if err != nil {
+		log.Println(err)
+		c.Status(http.StatusInternalServerError).JSON("Error requesting resources")
+		return nil
+	}
+
+	resources := []string{}
+	roles := []string{}
+	rolesResources := dto.ResourcesRolesResult{
+		ResourcesRoles: dto.ResourcesRoles{},
+	}
+	for rows.Next() {
+		var dbRole dto.DBRole
+		rows.StructScan(&dbRole)
+		log.Printf("%#v", dbRole)
+		resroles := strings.Split(dbRole.Name, ":")
+		if len(resroles) == 0 {
+			continue
+		}
+		lenresroles := len(resroles)
+		role := resroles[lenresroles-1]
+		resource := strings.Join(resroles[0:lenresroles-1], ":")
+		resources = append(resources, resource)
+		roles = append(roles, role)
+		_, exists := rolesResources.ResourcesRoles[resource]
+		if !exists {
+			rolesResources.ResourcesRoles[resource] = []string{}
+		}
+		rolesResources.ResourcesRoles[resource] = append(rolesResources.ResourcesRoles[resource], role)
+
+	}
+
+	if len(roles) == 0 {
+		c.Status(http.StatusInternalServerError).JSON("No roles")
+		return nil
+	}
+
+	q := fmt.Sprintf("select r.resource_id , r.name, r.type, r2.scope_id, sc.name as scope_name from public.resources r left join public.resourcesscopes r2 on r2.resource_id = r.resource_id left join public.scopes sc on sc.scope_id = r2.scope_id left join public.userpermissions u on u.resourcesscope_id = r2.resourcesscope_id where u.uuid = '%s' or r.type ~* '%s';", uuid, strings.Join(resources, "|"))
+	log.Println(q)
+	resourceRows, err := db.db.Queryx(q)
+	if err != nil {
+		log.Println(err)
+		c.Status(http.StatusInternalServerError).JSON("Error requesting resources")
+		return nil
+	}
+	rTree := getResourceTree(resourceRows, "", 999999999, rolesResources.ResourcesRoles)
+	rolesResources.ResourceTee = *rTree
+	return c.JSON(rolesResources)
+
+}
+
 func (db *DB) groupsHandler(c *fiber.Ctx) error {
 	uuid := c.Params("uuid")
 	if uuid == "" {
@@ -110,7 +171,8 @@ func (db *DB) groupsHandler(c *fiber.Ctx) error {
 			continue
 		}
 		role := dto.Role{
-			Name: dbRole.Name,
+			Name:       dbRole.Name,
+			Permission: []dto.ResourcesPermission{},
 		}
 		// Has "type" in name
 		types := strings.Split(dbRole.Name, ":")
@@ -118,6 +180,20 @@ func (db *DB) groupsHandler(c *fiber.Ctx) error {
 			role.Role = types[len(types)-1]
 			role.Type = strings.Join(types[0:len(types)-1], ":")
 		}
+		q := fmt.Sprintf("select r.resource_id , r.name, r.type, r2.scope_id, sc.name as scope_name from public.resources r left join public.resourcesscopes r2 on r2.resource_id = r.resource_id left join public.scopes sc on sc.scope_id = r2.scope_id where r.type like '%s%%';", role.Type)
+		resourceRows, err := db.db.Queryx(q)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		rTree := getResourceTree(resourceRows, "", 1000000, dto.NewResourcesRoles())
+		role.ResourceTee = *rTree
+		for resourceRows.Next() {
+			var resourcesPermission dto.ResourcesPermission
+			resourceRows.StructScan(&resourcesPermission)
+			role.Permission = append(role.Permission, resourcesPermission)
+		}
+
 		roles = append(roles, role)
 
 	}
@@ -180,7 +256,18 @@ func (db *DB) resourcesHandler(c *fiber.Ctx) error {
 		dto.ResourcesPermission{ResourceID:3, Name:"ruv:racoon", Type:"org:team", ScopeID:"6", ScopeName:"api:read"}
 
 	*/
+	rTree := getResourceTree(rows, qType, qDepth, dto.NewResourcesRoles())
 
+	return c.JSON(rTree)
+}
+func (db *DB) putHandler(c *fiber.Ctx) error {
+	return c.SendString("Hello")
+}
+func (db *DB) deleteHandler(c *fiber.Ctx) error {
+	return c.SendString("Hello")
+}
+
+func getResourceTree(rows *sqlx.Rows, qType string, qDepth int, resourcesRoles dto.ResourcesRoles) *map[string]dto.ResourcesTree {
 	// Create the original 'resource tree'
 	rTree := map[string]dto.ResourcesTree{}
 	log.Println("RESULTS:")
@@ -203,9 +290,10 @@ func (db *DB) resourcesHandler(c *fiber.Ctx) error {
 		var typePath string
 		x := 0
 		// Range the 'names' ["ruv"", "kompass"]
+		roles := []string{}
 		for i, n := range names {
 
-			// Create the 'type path': We are in loop 1; get all "types" from "0" to "1+1" and join them with ":"
+			// Create the 'type path': We are in loop 0; get all "types" from "0" to "0+1" and join them with ":"
 			typePath = strings.Join(types[0:i+1], ":")
 			if len(qType) > 0 && !strings.HasPrefix(typePath, qType) {
 				continue
@@ -215,6 +303,12 @@ func (db *DB) resourcesHandler(c *fiber.Ctx) error {
 				continue
 			}
 			x++
+
+			// Get Resources Roles for the current "typePath" ["org", "org:team", "org:team:service" ...] and append it to the current roles array; the roles are added to each each resource in the tree
+			rr, existsrr := resourcesRoles[typePath]
+			if existsrr {
+				roles = addIfNotExists(roles, rr)
+			}
 
 			// The loop internal 'resource tree' point to the 'pointer original tree'
 			rt := *rTreeP
@@ -228,6 +322,7 @@ func (db *DB) resourcesHandler(c *fiber.Ctx) error {
 				if i == len(types)-1 {
 					rt[n] = dto.ResourcesTree{
 						Name:         n,
+						Roles:        roles,
 						OriginalName: resourcesPermission.Name,
 						Type:         typePath,
 						Scopes:       []string{resourcesPermission.ScopeName},
@@ -239,6 +334,7 @@ func (db *DB) resourcesHandler(c *fiber.Ctx) error {
 					// Assign the the new resource tree 'resTree' that in the next loop we can add a new element to it
 					rt[n] = dto.ResourcesTree{
 						Name:      n,
+						Roles:     roles,
 						Type:      typePath,
 						Scopes:    []string{},
 						Resources: resTree,
@@ -251,6 +347,7 @@ func (db *DB) resourcesHandler(c *fiber.Ctx) error {
 				resTree = rNode.Resources
 				if i == len(types)-1 {
 					rNode.Scopes = append(rNode.Scopes, resourcesPermission.ScopeName)
+					rNode.Roles = addIfNotExists(rNode.Roles, roles)
 					rt[n] = rNode
 				}
 
@@ -258,11 +355,35 @@ func (db *DB) resourcesHandler(c *fiber.Ctx) error {
 			rTreeP = &resTree
 		}
 	}
-	return c.JSON(rTree)
+	return &rTree
 }
-func (db *DB) putHandler(c *fiber.Ctx) error {
-	return c.SendString("Hello")
+
+func removeDuplicate(array []string) []string {
+	m := make(map[string]string)
+	for _, x := range array {
+		m[x] = x
+	}
+	var ClearedArr []string
+	for x, _ := range m {
+		ClearedArr = append(ClearedArr, x)
+	}
+	return ClearedArr
 }
-func (db *DB) deleteHandler(c *fiber.Ctx) error {
-	return c.SendString("Hello")
+
+func contains(s []string, e string) bool {
+	for _, a := range s {
+		if a == e {
+			return true
+		}
+	}
+	return false
+}
+
+func addIfNotExists(primary []string, secondary []string) []string {
+	for _, s := range secondary {
+		if !contains(primary, s) {
+			primary = append(primary, s)
+		}
+	}
+	return primary
 }
